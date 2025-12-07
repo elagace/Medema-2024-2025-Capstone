@@ -1,0 +1,72 @@
+import serial
+import csv
+import time
+import pandas as pd
+import matplotlib.pyplot as plt
+from datetime import datetime
+
+# ---------------- Serial setup ----------------
+ser = serial.Serial('/dev/ttyACM0', 115200, timeout=1)
+time.sleep(2)  # allow Arduino to reset
+
+# ---------------- CSV setup ----------------
+outfile = "P1_T1_G0.csv"
+f = open(outfile, "w", newline="")
+writer = csv.writer(f)
+
+writer.writerow(["Time_ms", "Clock", "Weight_g"])
+
+print("Press Enter to START logging...")
+input()
+
+print("Logging started. Press Ctrl+C to STOP.")
+
+# ---- Fixed 10 ms counter ----
+elapsed_ms = 0         # start at 0 ms
+interval_ms = 10       # fixed 10 ms step
+
+try:
+    while True:
+        if ser.in_waiting > 0:
+            line = ser.readline().decode('utf-8', errors='ignore').strip()
+
+            if line.startswith("Weight:"):
+                try:
+                    parts = line.split()
+                    value_str = parts[1].replace("g", "")
+                    weight = float(value_str)
+
+                    # ---- FIXED elapsed time ----
+                    t = elapsed_ms
+                    elapsed_ms += interval_ms
+
+                    # ---- PC clock in safe (Excel-proof) format ----
+                    clock_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+
+                    writer.writerow([t, clock_str, weight])
+                    f.flush()
+
+                    print(f"{t} ms | {clock_str} -> {weight} g")
+
+                except (ValueError, IndexError):
+                    print(f"IGNORED: {line}")
+
+except KeyboardInterrupt:
+    print("\nLogging stopped by user.")
+
+finally:
+    f.close()
+    ser.close()
+
+# ---------------- Plotting ----------------
+df = pd.read_csv(outfile)
+
+plt.figure(figsize=(8, 5))
+plt.plot(df["Time_ms"], df["Weight_g"], linewidth=1.5)
+plt.xlabel("Time (ms)")
+plt.ylabel("Weight (g)")
+plt.title("Weight vs Time (10 ms intervals)")
+plt.grid(True)
+
+plt.savefig(outfile.replace(".csv", ".png"), dpi=300)
+plt.show()
