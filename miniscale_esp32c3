@@ -1,0 +1,100 @@
+#include <Wire.h>
+
+#define MINISCALE_ADDR 0x26   // I2C address of MiniScale
+#define REG_WEIGHT     0x10   // Weight register (float, 4 bytes)
+
+// --- Calibration parameters ---
+float zeroOffset = 0;       // baseline offset
+float scaleFactor = 1.0;    // adjust if readings don't match known weight
+
+// --- Smoothing ---
+const int N = 10;           // moving average window
+float readings[N] = {0};
+int idx = 0;
+
+// --- Function prototypes ---
+float readWeight();
+float averageZero(int samples = 20);
+
+void setup() {
+  Serial.begin(115200);
+  Wire.begin(D4, D5);   
+
+  delay(200);
+
+  Serial.println("MiniScale test on ESP32C3...");
+  Serial.println("Please keep scale empty...");
+  delay(3000); // wait for sensor to stabilize
+
+  zeroOffset = averageZero(20); // get averaged zero baseline
+  Serial.print("Zero offset set to: ");
+  Serial.println(zeroOffset, 3);
+  Serial.println("Tare complete. Type 't' to re-tare anytime.");
+}
+
+void loop() {
+  // --- Manual tare ---
+  if (Serial.available()) {
+    char c = Serial.read();
+    if (c == 't' || c == 'T') {
+      zeroOffset = averageZero(20);
+      Serial.print("New zero offset: ");
+      Serial.println(zeroOffset, 3);
+      Serial.println("Tare done!");
+    }
+  }
+
+  // --- Read raw weight ---
+  float raw = readWeight();
+  if (isnan(raw)) {
+    Serial.println("I2C read error!");
+    delay(500);
+    return;
+  }
+
+  // --- Apply tare and calibration ---
+  float weight = (raw - zeroOffset) * scaleFactor;
+
+  // --- Moving average ---
+  readings[idx] = weight;
+  idx = (idx + 1) % N;
+
+  float sum = 0;
+  for (int i = 0; i < N; i++) sum += readings[i];
+  float avgWeight = sum / N;
+
+  // --- Print result ---
+  Serial.print("Weight: ");
+  Serial.print(avgWeight, 2);
+  Serial.println(" g");
+
+  delay(10);
+}
+
+// --- Read 4-byte float from MiniScale ---
+float readWeight() {
+  Wire.beginTransmission(MINISCALE_ADDR);
+  Wire.write(REG_WEIGHT);
+  Wire.endTransmission(false);
+
+  Wire.requestFrom(MINISCALE_ADDR, 4);
+  if (Wire.available() < 4) return NAN;
+
+  uint8_t data[4];
+  for (int i = 0; i < 4; i++) data[i] = Wire.read();
+
+  float value;
+  memcpy(&value, data, sizeof(float));
+  return value;
+}
+
+// --- Average multiple zero readings ---
+float averageZero(int samples) {
+  float sum = 0;
+  for (int i = 0; i < samples; i++) {
+    float w = readWeight();
+    if (!isnan(w)) sum += w;
+    delay(100);
+  }
+  return sum / samples;
+}
